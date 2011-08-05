@@ -16,7 +16,7 @@ module Graphics.Spiro.Raw
        (
          spiroToBezier
        , PostscriptLike(..)
-       , SpiroType(..)
+       , SpiroConstraint(..)
        , SpiroPoint(..)
        ) where
 
@@ -25,39 +25,66 @@ import Foreign.Ptr
 import Foreign.C.String
 import Foreign.C.Types
 
+import Control.Monad
 import Control.Monad.IO.Class
 import Control.Concurrent.MVar
 
 type CBool = CInt
 
+-- | Type class for a postscript-like context.  Instances would typically
+--   use either a writer or state monad to keep track of the various spiro
+--   operations.
 class MonadIO m => PostscriptLike m where
-    moveTo'  :: Double -> Double -> Bool -> m ()
+    -- | Moves to start a new path.
+    moveTo'  :: Double -- ^ X coordinate
+             -> Double -- ^ Y coordinate
+             -> Bool   -- ^ True if the new path will be closed
+             -> m ()
+    -- | Moves to start a new open path.
     moveTo :: Double -> Double -> m ()
     moveTo x y = moveTo' x y False
+    -- | Continue with a line segment.
     lineTo :: Double -> Double -> m ()
+    -- | Continue with a quadratic bezier segment.
     quadTo :: Double -> Double -> Double -> Double -> m ()
+    -- | Continue with a cubic bezier segment.
     curveTo :: Double -> Double -> Double -> Double -> Double -> Double -> m ()
+    -- | Mark a knot with an index.
     markKnot :: Int -> m ()
 
-data SpiroType = SpiroCorner | SpiroG4 | SpiroG2 | SpiroLeft | SpiroRight
-data SpiroPoint = SpiroPoint { spiroPoint :: (Double, Double), spiroType :: SpiroType }
+-- | Continuity constraint.
+data SpiroConstraint = SpiroCorner -- ^ Slopes and curvatures are unconstrained.
+                     | SpiroG4     -- ^ Ensure continuity up to the fourth derivative.
+                     | SpiroG2     -- ^ Ensure continuity up to the second derivative.
+                     | SpiroLeft   -- ^ Connect a curved line to a straight one.
+                     | SpiroRight  -- ^ Connect a straight line to a curved one.
 
-spiroTypeChar :: SpiroType -> CChar
+-- | A point paired with its continuity constraint.
+data SpiroPoint = SpiroPoint 
+                { spiroPoint :: (Double, Double)     -- ^ Control point location (the curve will pass through this point).
+                , spiroConstraint :: SpiroConstraint -- ^ Continuity Constraints for the point.
+                }
+
+spiroTypeChar :: SpiroConstraint -> CChar
 spiroTypeChar SpiroCorner = castCharToCChar 'v'
 spiroTypeChar SpiroG4     = castCharToCChar 'o'
 spiroTypeChar SpiroG2     = castCharToCChar 'c'
 spiroTypeChar SpiroLeft   = castCharToCChar '['
 spiroTypeChar SpiroRight  = castCharToCChar ']'
 
-spiroToBezier :: PostscriptLike m => Bool -> [SpiroPoint] -> m ()
+-- | Convert a list of spiro control points into bezier segments
+--   using a 'PostscriptLike' context.
+spiroToBezier :: PostscriptLike m 
+              => Bool              -- ^ 'True' to compute a closed path
+              -> [SpiroPoint]      -- ^ List of spiro control points.
+              -> m ()
 spiroToBezier closed ps = do
     m <- liftIO $ newMVar (return ())
     liftIO $ spiroToBezier' m closed ps
-    a <- liftIO $ takeMVar m
-    a
+    join . liftIO . takeMVar $ m
 
 spiroToBezier' :: PostscriptLike m => MVar (m ()) -> Bool -> [SpiroPoint] -> IO ()
-spiroToBezier' context closed ps = liftIO $ do
+spiroToBezier' context closed ps = liftIO $
     wrap mkM $ \m ->
      wrap mkL $ \l ->
       wrap mkQ $ \q ->
@@ -75,7 +102,7 @@ spiroToBezier' context closed ps = liftIO $ do
            hm <- mk
            cont (castFunPtrToPtr hm)
            freeHaskellFunPtr hm
-    mkM = mkMoveto   $ \_ a b c       -> fromMVar context $ moveTo'  (realToFrac a) (realToFrac b) (c /= 0)
+    mkM = mkMoveto   $ \_ a b c       -> fromMVar context $ moveTo'  (realToFrac a) (realToFrac b) (c == 0)
     mkL = mkLineto   $ \_ a b         -> fromMVar context $ lineTo   (realToFrac a) (realToFrac b)
     mkQ = mkQuadto   $ \_ a b c d     -> fromMVar context $ quadTo   (realToFrac a) (realToFrac b) (realToFrac c) (realToFrac d)
     mkC = mkCurveto  $ \_ a b c d e f -> fromMVar context $ curveTo  (realToFrac a) (realToFrac b) (realToFrac c) (realToFrac d) (realToFrac e) (realToFrac f)
@@ -91,9 +118,9 @@ spiroToBezier' context closed ps = liftIO $ do
 #include "bezctx.h"
 #include "spiroentrypoints.h"
 
-data SpiroCP = SpiroCP { spiro_x :: CDouble, spiro_y :: CDouble, spiro_ty :: CChar }
+data SpiroCP = SpiroCP { spiroX :: CDouble, spiroY :: CDouble, spiroTy :: CChar }
     deriving (Show, Eq, Ord)
-    
+
 instance Storable SpiroCP where
     sizeOf  _ = (#size spiro_cp)
     alignment _ = alignment (undefined :: CDouble)

@@ -2,7 +2,7 @@ Name:                spiro-raw
 Version:             0.1
 Synopsis:            Haskell wrapper for libspiro.
 Description:         Haskell wrapper for Raph Levien's libspiro.  http://libspiro.sourceforge.net/
-Homepage:            http://patch-tag/r/fryguybob/spiro-raw
+Homepage:            http://patch-tag.com/r/fryguybob/spiro-raw
 License:             GPL-2
 License-file:        LICENSE
 Author:              Ryan Yates
